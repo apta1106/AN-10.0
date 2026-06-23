@@ -25,29 +25,19 @@ const SUPABASE_ANON_KEY =
    INISIALISASI CLIENT
    Menggunakan Supabase CDN — sudah di-load via index.html
    ============================================================ */
-// Access token disimpan di sini, diupdate setiap auth state berubah
 let _accessToken = null;
 
-// Buat Supabase client dengan custom fetch
-// Tujuan: inject Authorization header dari token terbaru di setiap request
 const _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-  },
+  auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true },
   global: {
     fetch: (url, options = {}) => {
-      // Inject header Authorization + Content-Type di setiap request
       const headers = {
         'apikey': SUPABASE_ANON_KEY,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         ...(options.headers || {}),
       };
-      if (_accessToken) {
-        headers['Authorization'] = `Bearer ${_accessToken}`;
-      }
+      if (_accessToken) headers['Authorization'] = `Bearer ${_accessToken}`;
       return fetch(url, { ...options, headers });
     }
   }
@@ -126,8 +116,6 @@ function getCurrentUser() {
  * Dipanggil otomatis saat supabase.js dimuat
  */
 async function _initSession() {
-  // INITIAL_SESSION event dari onAuthStateChange sudah handle loadData.
-  // _initSession hanya untuk inisialisasi token awal.
   try {
     const { data: { session } } = await _sb.auth.getSession();
     _accessToken = session?.access_token ?? null;
@@ -144,21 +132,12 @@ async function _initSession() {
   }
 }
 
-/**
- * Tunggu APP dari script.js siap sebelum loadData
- * Mencegah race condition "APP tidak ditemukan"
- */
 function _waitAppReadyThenLoad() {
   if (window._ANAppReady) {
     loadData();
   } else {
     window.addEventListener('an-app-ready', () => loadData(), { once: true });
-    setTimeout(() => {
-      if (!window._ANAppReady && _currentUser) {
-        _log("Fallback load setelah timeout");
-        loadData();
-      }
-    }, 4000);
+    setTimeout(() => { if (!window._ANAppReady && _currentUser) loadData(); }, 4000);
   }
 }
 
@@ -167,28 +146,18 @@ function _waitAppReadyThenLoad() {
  */
 _sb.auth.onAuthStateChange(async (event, session) => {
   _log("Auth event:", event);
-
-  // SELALU update token dulu — ini kunci fix 403 dan PGRST102
   _accessToken = session?.access_token ?? null;
-
   if (event === "INITIAL_SESSION" && session?.user) {
-    // Session sudah ada saat page load
     _currentUser = session.user;
     _updateUILogin(_currentUser);
     _waitAppReadyThenLoad();
   } else if (event === "SIGNED_IN" && session?.user) {
-    // User baru saja login
     _currentUser = session.user;
     _updateUILogin(_currentUser);
     _waitAppReadyThenLoad();
-    _showNotif(
-      `Halo, ${_currentUser.user_metadata?.name ?? "User"}! Data dimuat dari cloud.`,
-      "success",
-    );
+    _showNotif(`Halo, ${_currentUser.user_metadata?.name ?? "User"}! Data dimuat dari cloud.`, "success");
   } else if (event === "TOKEN_REFRESHED" && session) {
-    // Token di-refresh otomatis — update token baru
     _accessToken = session.access_token;
-    _log("Token refreshed");
   } else if (event === "SIGNED_OUT") {
     _currentUser = null;
     _accessToken = null;
@@ -322,7 +291,7 @@ async function _syncProfile(uid, app) {
 
   const { error } = await _sb
     .from("profiles")
-    .upsert(payload, { onConflict: "id" });
+    .upsert(payload, { onConflict: "id", ignoreDuplicates: false });
   if (error) _err("Sync profiles gagal", error);
 }
 
@@ -364,16 +333,15 @@ async function _syncTable(table, uid, items) {
  * Mapping data APP → format kolom DB per tabel
  */
 function _mapToDb(table, uid, item) {
-  const base = {
-    id: item.id,
-    user_id: uid,
-    updated_at: new Date().toISOString(),
-  };
+  const now = new Date().toISOString();
+  const base = { id: item.id, user_id: uid };
+  // updated_at hanya untuk tabel yang punya kolom tersebut (bukan activity_logs, sosial)
+  const baseWithTs = { ...base, updated_at: now };
 
   switch (table) {
     case "quests":
       return {
-        ...base,
+        ...baseWithTs,
         judul: item.judul,
         deskripsi: item.deskripsi,
         kategori: item.kategori,
@@ -385,7 +353,7 @@ function _mapToDb(table, uid, item) {
       };
     case "inventory":
       return {
-        ...base,
+        ...baseWithTs,
         gambar: item.gambar,
         nama: item.nama,
         harga: item.harga,
@@ -395,7 +363,7 @@ function _mapToDb(table, uid, item) {
       };
     case "wishlist":
       return {
-        ...base,
+        ...baseWithTs,
         gambar: item.gambar,
         nama: item.nama,
         spesifikasi: item.spesifikasi,
@@ -406,7 +374,7 @@ function _mapToDb(table, uid, item) {
       };
     case "goals":
       return {
-        ...base,
+        ...baseWithTs,
         judul: item.judul,
         kategori: item.kategori,
         deskripsi: item.deskripsi,
@@ -414,17 +382,17 @@ function _mapToDb(table, uid, item) {
       };
     case "savings":
       return {
-        ...base,
+        ...baseWithTs,
         nama: item.nama,
         target: item.target,
         terkumpul: item.terkumpul,
         deadline: item.deadline,
       };
     case "finance_accounts":
-      return { ...base, nama: item.nama, ikon: item.ikon, saldo: item.saldo };
+      return { ...baseWithTs, nama: item.nama, ikon: item.ikon, saldo: item.saldo };
     case "transactions":
       return {
-        ...base,
+        ...baseWithTs,
         tipe: item.tipe,
         nominal: item.nominal,
         kategori: item.kategori,
@@ -440,7 +408,7 @@ function _mapToDb(table, uid, item) {
         waktu: item.waktu ?? new Date().toISOString(),
       };
     case "ai_chats":
-      return { ...base, judul: item.judul, pesan: item.pesan ?? [] };
+      return { ...baseWithTs, judul: item.judul, pesan: item.pesan ?? [] };
     case "sosial":
       return {
         ...base,
@@ -473,11 +441,8 @@ async function loadData() {
     return;
   }
 
-  // Pastikan token fresh sebelum semua request
-  const { data: { session: freshSession } } = await _sb.auth.getSession();
-  if (freshSession?.access_token) {
-    _accessToken = freshSession.access_token;
-  }
+  const { data: { session: fs } } = await _sb.auth.getSession();
+  if (fs?.access_token) _accessToken = fs.access_token;
 
   const uid = _currentUser.id;
   _log("Memuat data dari cloud untuk:", _currentUser.email);
