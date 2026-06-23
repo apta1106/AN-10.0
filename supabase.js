@@ -289,9 +289,28 @@ async function _syncProfile(uid, app) {
     updated_at: new Date().toISOString(),
   };
 
-  const { error } = await _sb
+  // Coba UPDATE dulu, kalau tidak ada row baru INSERT
+  const { data: existing } = await _sb
     .from("profiles")
-    .upsert(payload, { onConflict: "id", ignoreDuplicates: false });
+    .select("id")
+    .eq("id", uid)
+    .single();
+
+  let error;
+  if (existing) {
+    // Row sudah ada — UPDATE
+    const { error: updateErr } = await _sb
+      .from("profiles")
+      .update(payload)
+      .eq("id", uid);
+    error = updateErr;
+  } else {
+    // Row belum ada — INSERT
+    const { error: insertErr } = await _sb
+      .from("profiles")
+      .insert(payload);
+    error = insertErr;
+  }
   if (error) _err("Sync profiles gagal", error);
 }
 
